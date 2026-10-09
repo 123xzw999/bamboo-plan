@@ -1,0 +1,5 @@
+# 统一换行符，避免 Windows 工作区把 CRLF 带进仓库
+* text=auto eol=lf
+*.png binary
+*.webp binary
+*.woff2 binary
