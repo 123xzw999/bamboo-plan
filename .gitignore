@@ -1,0 +1,8 @@
+# 临时验收产物（每次运行脚本都会重建，不进仓库）
+_verify.html
+_shot.html
+_vdom.html
+_shots/
+_vc/
+*.tmp
+.gh_token.tmp

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>竹略 · 长期计划与实现分布</title>
+<meta name="description" content="竹略 —— 把长期愿景拆成可执行的小块，向下生发，向上坚韧。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f2b21'/%3E%3Cpath d='M16 27V6' stroke='%236fd3a4' stroke-width='2.6' stroke-linecap='round'/%3E%3Cpath d='M16 11.5h6M16 17.5h-6M16 23h5' stroke='%23d9b45a' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preload" href="assets/fonts/brush.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ══════════ 登录门禁 ══════════ -->
+<div id="gate" class="gate">
+  <div class="gate__art" aria-hidden="true"></div>
+  <div class="gate__veil" aria-hidden="true"></div>
+  <div class="gate__branch" aria-hidden="true"></div>
+
+  <form class="gate__card" id="gateForm" novalidate>
+    <svg class="gate__seal" viewBox="0 0 48 48" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="45" height="45" rx="12" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".5"/>
+      <path d="M24 41V9" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M24 17h9M24 25h-9M24 33h7.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".72"/>
+    </svg>
+
+    <h1 class="brush brush--lg">竹略</h1>
+    <p class="brush brush--slogan">向下生发，向上坚韧</p>
+    <p class="gate__sub">长期计划与实现分布</p>
+
+    <div class="field">
+      <input id="gateUser" name="u" type="text" inputmode="numeric" autocomplete="username" placeholder="账号" required>
+    </div>
+    <div class="field">
+      <input id="gatePass" name="p" type="password" autocomplete="current-password" placeholder="密码" required>
+    </div>
+    <p class="gate__err" id="gateErr" role="alert" aria-live="polite"></p>
+
+    <button class="btn btn--solid btn--block" type="submit">进 入</button>
+    <p class="gate__foot">日拱一卒 · 功不唐捐</p>
+  </form>
+</div>
+
+<!-- ══════════ 主应用 ══════════ -->
+<div id="app" class="app" hidden>
+
+  <aside class="rail">
+    <div class="rail__brand">
+      <svg class="rail__mark" viewBox="0 0 40 40" aria-hidden="true">
+        <path d="M20 35V6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M20 14h8M20 21h-8M20 28h6.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".7"/>
+      </svg>
+      <div class="rail__name">
+        <b class="brush brush--xs">竹略</b>
+        <span>长期主义 · 实现分布</span>
+      </div>
+    </div>
+
+    <nav class="rail__nav" id="nav">
+      <button type="button" data-view="home"   class="navbtn"><i class="ico ico-home"></i><span>主页</span></button>
+      <button type="button" data-view="tree"   class="navbtn"><i class="ico ico-tree"></i><span>战略树</span></button>
+      <button type="button" data-view="board"  class="navbtn"><i class="ico ico-board"></i><span>看板</span></button>
+      <button type="button" data-view="gantt"  class="navbtn"><i class="ico ico-time"></i><span>时间线</span></button>
+      <button type="button" data-view="review" class="navbtn"><i class="ico ico-review"></i><span>复盘</span></button>
+    </nav>
+
+    <div class="rail__foot">
+      <button type="button" class="toolbtn" id="btnTheme" title="切换明暗">
+        <i class="ico ico-sun"></i><span id="themeLabel">日间</span>
+      </button>
+      <button type="button" class="toolbtn" id="btnData" title="数据与备份">
+        <i class="ico ico-data"></i><span>数据</span>
+      </button>
+    </div>
+  </aside>
+
+  <div class="stage">
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="topbar__lead">
+          <h2 class="topbar__title" id="viewTitle">主页</h2>
+          <p class="topbar__sub" id="viewSub"></p>
+        </div>
+        <div class="topbar__tools">
+          <div class="searchbox">
+            <i class="ico ico-search"></i>
+            <input id="search" type="search" placeholder="搜索想法 / 目标" autocomplete="off">
+          </div>
+          <button type="button" class="btn btn--solid" id="btnNew"><span class="plus">＋</span> 新的想法</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="view" id="view" tabindex="-1"></main>
+  </div>
+</div>
+
+<!-- ══════════ 底部竹影（随页面常驻） ══════════ -->
+<div class="bamboo" aria-hidden="true">
+  <div class="bamboo__band bamboo__band--light" data-band="light"></div>
+  <div class="bamboo__band bamboo__band--dark"  data-band="dark"></div>
+</div>
+
+<!-- ══════════ 抽屉 / 弹窗 ══════════ -->
+<div class="scrim" id="scrim" hidden></div>
+
+<aside class="drawer" id="drawer" hidden aria-modal="true" role="dialog">
+  <header class="drawer__head">
+    <h3 id="drawerTitle">详情</h3>
+    <button type="button" class="xbtn" id="drawerClose" aria-label="关闭">✕</button>
+  </header>
+  <div class="drawer__body" id="drawerBody"></div>
+</aside>
+
+<div class="modal" id="modal" hidden aria-modal="true" role="dialog">
+  <div class="modal__card" id="modalCard"></div>
+</div>
+
+<div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
+
+<script src="js/store.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/views.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
