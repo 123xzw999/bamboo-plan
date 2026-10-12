@@ -1,571 +1,614 @@
-/* ═══════════════════════════════════════════════════════════
-   竹略 · 应用层：路由 / 主题 / 交互 / 竹影
-   ═══════════════════════════════════════════════════════════ */
-;(function (global) {
-'use strict';
+/* ============================================================
+   竹略 · 视图与交互
+   账号：123456 ／ 口令：xiaoxiong666（本地门帘，非加密存储）
+   ============================================================ */
+(function () {
+  "use strict";
 
-var S = global.Store, V = global.Views, A = global.Auth;
-var q = function (s, r) { return (r || document).querySelector(s); };
-var qa = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
-
-var ROUTES = {
-  home:   { title: '主页',   sub: '愿景 · 总览 · 当前聚焦',                     art: 'a' },
-  tree:   { title: '战略树', sub: '愿景 → 战略 → 阶段 → 任务 → 子任务，可无限下钻', art: 'a' },
-  board:  { title: '看板',   sub: '拖动卡片，改变它的生长状态',                  art: 'b' },
-  gantt:  { title: '时间线', sub: '目标在时间轴上的分布与重叠',                  art: 'b' },
-  review: { title: '复盘',   sub: '看清结构，才能调整结构',                      art: 'a' }
-};
-
-var current = 'home';
-var openSet = new Set();
-var query = '';
-var dragId = null;
-var seededOpen = false;
-
-/* ══════════ 底部竹影：把一张图切成互相搭接的三段，各自异相摆动 ══════════ */
-function buildBamboo() {
-  var slices = [
-    { l: 0,  r: 55, dur: '9.6s',  del: '0s',    amp: '0.55deg' },
-    { l: 27, r: 28, dur: '11.4s', del: '-2.6s', amp: '0.78deg' },
-    { l: 55, r: 0,  dur: '8.3s',  del: '-5.1s', amp: '0.62deg' }
-  ];
-  qa('.bamboo__band').forEach(function (band) {
-    band.innerHTML = slices.map(function (s) {
-      return '<i style="--l:' + s.l + '%;--r:' + s.r + '%;--dur:' + s.dur +
-        ';--del:' + s.del + ';--amp:' + s.amp + '"></i>';
-    }).join('');
-  });
-}
-
-/* ══════════ 主题 ══════════ */
-function effectiveTheme() {
-  var t = S.state().ui.theme;
-  if (t === 'light' || t === 'dark') return t;
-  return global.matchMedia && global.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
-function applyTheme() {
-  var eff = effectiveTheme();
-  document.documentElement.setAttribute('data-theme', eff);
-  var label = q('#themeLabel');
-  if (label) label.textContent = eff === 'dark' ? '夜间' : '日间';
-  var icon = q('#btnTheme .ico');
-  if (icon) icon.className = 'ico ' + (eff === 'dark' ? 'ico-sun' : 'ico-moon');
-  var meta = q('meta[name="theme-color"]');
-  if (!meta) {
-    meta = document.createElement('meta');
-    meta.name = 'theme-color';
-    document.head.appendChild(meta);
-  }
-  meta.content = eff === 'dark' ? '#07110d' : '#f4f1e8';
-}
-function toggleTheme() {
-  S.setTheme(effectiveTheme() === 'dark' ? 'light' : 'dark');
-  applyTheme();
-}
-
-/* ══════════ 渲染 ══════════ */
-function render() {
-  var view = q('#view');
-  var el = q('.bamboo');
-
-  if (query) {
-    q('#viewTitle').textContent = '搜索';
-    q('#viewSub').textContent = '「' + query + '」的结果';
-    if (el) el.setAttribute('data-art', 'b');
-    view.innerHTML = searchView(query);
-    markNav(null);
-    return;
-  }
-
-  var r = ROUTES[current] || ROUTES.home;
-  q('#viewTitle').textContent = r.title;
-  q('#viewSub').textContent = r.sub;
-  if (el) el.setAttribute('data-art', r.art);
-
-  if (current === 'tree') {
-    if (!seededOpen) {
-      seededOpen = true;
-      S.roots().forEach(function (n) {
-        openSet.add(n.id);
-        S.children(n.id).forEach(function (c) { openSet.add(c.id); });
-      });
-    }
-    view.innerHTML = V.tree({ open: openSet });
-  } else {
-    view.innerHTML = V[current]();
-  }
-  markNav(current);
-  if (!q('#drawer').hidden) refreshDrawer();
-}
-
-function markNav(v) {
-  qa('#nav .navbtn').forEach(function (b) {
-    b.classList.toggle('is-on', b.getAttribute('data-view') === v);
-  });
-}
-
-function searchView(text) {
-  var res = S.search(text);
-  if (!res.length) {
-    return '<div class="empty"><b>没有找到「' + S.esc(text) + '」</b>换个词试试，或者直接新建一条。</div>';
-  }
-  var H = ['<div class="sec__head"><h2 class="sec__title inkgold">找到 ' + res.length + ' 条</h2>' +
-    '<span class="sec__line"></span></div><div class="card card--pad"><div class="feed">'];
-  res.forEach(function (n) {
-    var path = S.pathOf(n.id).slice(0, -1);
-    H.push('<div class="feed__item" data-act="open" data-id="' + n.id + '">' + V.stChip(n.status) +
-      '<div class="feed__t"><b>' + S.esc(n.title) + '</b><span>' +
-      (path.length ? S.esc(path.join(' › ')) + ' · ' : '') + n.progress + '%</span></div></div>');
-  });
-  H.push('</div></div>');
-  return H.join('');
-}
-
-/* ══════════ 抽屉 / 弹窗 / 提示 ══════════ */
-function openDrawer(id) {
-  var d = q('#drawer');
-  d.dataset.id = id;
-  q('#drawerTitle').textContent = '节点详情';
-  q('#drawerBody').innerHTML = V.nodeDrawer(id);
-  d.hidden = false;
-  q('#scrim').hidden = false;
-}
-function refreshDrawer() {
-  var id = q('#drawer').dataset.id;
-  if (id && S.byId(id)) q('#drawerBody').innerHTML = V.nodeDrawer(id);
-}
-function closeDrawer() {
-  q('#drawer').hidden = true;
-  q('#scrim').hidden = true;
-}
-
-function openModal(html, id) {
-  var m = q('#modal');
-  q('#modalCard').innerHTML = html;
-  m.dataset.id = id || '';
-  m.hidden = false;
-  q('#scrim').hidden = false;
-  var first = q('#modalCard input, #modalCard textarea');
-  if (first) setTimeout(function () { first.focus(); }, 60);
-}
-function closeModal() { q('#modal').hidden = true; q('#scrim').hidden = true; }
-function closeAll() { closeDrawer(); closeModal(); }
-
-var toastTimer = null;
-function toast(msg) {
-  var t = q('#toast');
-  t.textContent = msg;
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(function () { t.hidden = true; }, 2200);
-}
-
-function download(name, text, mime) {
-  var blob = new Blob([text], { type: mime || 'application/json;charset=utf-8' });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url; a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 400);
-}
-function stamp() {
-  var d = new Date(), p = function (n) { return ('0' + n).slice(-2); };
-  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
-}
-
-/* ══════════ 表单读写 ══════════ */
-function segPick(sel) {
-  var on = q(sel + ' .is-on');
-  return on ? (on.getAttribute('data-status') || on.getAttribute('data-prio')) : null;
-}
-function saveNode() {
-  var id = q('#modal').dataset.id;
-  var title = (q('#fTitle').value || '').trim();
-  if (!title) { toast('标题不能为空'); q('#fTitle').focus(); return; }
-
-  var steps = qa('#fSteps .step').map(function (row) {
-    var cb = q('input[type=checkbox]', row);
-    var inp = q('.st-inp', row);
-    return { id: row.getAttribute('data-step') || S.uid(), text: (inp.value || '').trim(), done: cb.checked };
-  }).filter(function (s) { return s.text; });
-
-  var parentVal = q('#fParent').value || null;
-  if (id && parentVal === id) { toast('上级不能是自己'); return; }
-
-  var patch = {
-    title: title,
-    parent: parentVal,
-    status: segPick('#fStatus') || 'idea',
-    progress: Number(q('#fProgress').value) || 0,
-    prio: Number(segPick('#fPrio')) || 2,
-    start: q('#fStart').value || '',
-    due: q('#fDue').value || '',
-    tags: (q('#fTags').value || '').split(/[,，;；\s]+/).map(function (s) { return s.trim(); }).filter(Boolean),
-    note: (q('#fNote').value || '').trim(),
-    steps: steps
+  /* 门禁：名号与口令以 FNV-1a 双轮摘要存放，源码里不出现明文；
+     但纯前端方案任何人都能绕过，它是「防误入」，不是真正的鉴权。 */
+  const AUTH = {
+    hUser: "0abcda9136997ee2",
+    hPass: "1df111b2b4cf8be3",
+    session: "zhulue.session.v1",
+    keep: 7 * 24 * 3600 * 1000,
   };
 
-  if (id) { S.updateNode(id, patch); toast('已保存'); }
-  else {
-    var n = S.addNode(patch);
-    if (patch.parent) openSet.add(patch.parent);
-    toast('已创建');
-    void n;
+  function fnv(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h >>> 0;
   }
-  closeModal();
-  render();
-}
-
-/* ══════════ 定位到树 ══════════ */
-function locateInTree(id) {
-  var node = S.byId(id);
-  if (!node) return;
-  var cur = node;
-  var guard = 0;
-  while (cur && cur.parent && guard++ < 200) { openSet.add(cur.parent); cur = S.byId(cur.parent); }
-  openSet.add(id);
-  query = '';
-  q('#search').value = '';
-  current = 'tree';
-  closeAll();
-  render();
-  setTimeout(function () {
-    var el = q('.tnode[data-id="' + id + '"] > .tnode__row');
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.style.transition = 'background .4s';
-      el.style.background = 'var(--jade-soft)';
-      setTimeout(function () { el.style.background = ''; }, 1400);
-    }
-  }, 90);
-}
-
-/* ══════════ 事件 ══════════ */
-function onAct(act, el, e) {
-  var id = el.getAttribute('data-id');
-
-  switch (act) {
-    case 'toggle': {
-      if (openSet.has(id)) openSet.delete(id); else openSet.add(id);
-      render();
-      return;
-    }
-    case 'open':
-      openDrawer(id);
-      return;
-    case 'add':
-      openModal(V.nodeForm(null, { parentId: id }), '');
-      return;
-    case 'edit': {
-      var n = S.byId(id);
-      if (!n) return;
-      var ex = new Set([id]);
-      S.descendants(id).forEach(function (d) { ex.add(d.id); });
-      openModal(V.nodeForm(n, { exclude: ex }), id);
-      return;
-    }
-    case 'del': {
-      var node = S.byId(id);
-      if (!node) return;
-      var kids = S.descendants(id).length;
-      var msg = '确定删除「' + node.title + '」？' + (kids ? '\n它下面的 ' + kids + ' 个子节点会一起删除。' : '') + '\n此操作不可撤销。';
-      if (!global.confirm(msg)) return;
-      S.removeNode(id);
-      closeAll();
-      render();
-      toast('已删除');
-      return;
-    }
-    case 'up':
-      S.moveNode(id, -1); render(); return;
-    case 'down':
-      S.moveNode(id, 1); render(); return;
-    case 'set-status':
-      S.setStatus(id, el.getAttribute('data-status'));
-      render();
-      return;
-    case 'step-toggle': {
-      var nd = S.byId(id);
-      if (!nd) return;
-      var sid = el.getAttribute('data-step');
-      nd.steps.forEach(function (s) { if (s.id === sid) s.done = el.checked; });
-      var done = nd.steps.filter(function (s) { return s.done; }).length;
-      var auto = Math.round(done / nd.steps.length * 100);
-      S.updateNode(id, { steps: nd.steps, progress: auto });
-      render();
-      return;
-    }
-    case 'step-add': {
-      var box = q('#fSteps');
-      var row = document.createElement('div');
-      row.className = 'step';
-      row.innerHTML = '<input type="checkbox"><input class="inp st-inp" placeholder="一个具体动作">' +
-        '<button type="button" class="st-x" data-act="step-remove">✕</button>';
-      box.appendChild(row);
-      q('.st-inp', row).focus();
-      return;
-    }
-    case 'step-remove':
-      el.parentNode.remove();
-      return;
-    case 'close-modal': closeModal(); return;
-    case 'save-node': saveNode(); return;
-
-    case 'vision-edit': {
-      var cur = S.state().meta.vision;
-      var txt = global.prompt('写下你的愿景（可以多行）：', cur);
-      if (txt === null) return;
-      S.setVision(txt.trim());
-      render();
-      toast('愿景已更新');
-      return;
-    }
-    case 'journal-add': {
-      var t = q('#journalInput');
-      if (!t || !t.value.trim()) { toast('先写点什么'); return; }
-      S.addJournal(t.value);
-      render();
-      toast('已记下');
-      return;
-    }
-    case 'journal-del':
-      S.removeJournal(id);
-      render();
-      return;
-
-    case 'focus':
-      locateInTree(id);
-      return;
-
-    case 'export-json':
-      download('竹略-备份-' + stamp() + '.json', S.exportJSON());
-      toast('已导出备份');
-      return;
-    case 'export-md':
-      download('竹略-战略书-' + stamp() + '.md', S.exportMarkdown(), 'text/markdown;charset=utf-8');
-      toast('已导出战略书');
-      return;
-    case 'import-json':
-      importInput().click();
-      return;
-    case 'load-demo':
-      if (!global.confirm('用示例战略替换当前全部内容？\n当前内容会被覆盖，建议先导出备份。')) return;
-      S.loadDemo();
-      openSet = new Set(); seededOpen = false;
-      closeAll(); render(); toast('已载入示例');
-      return;
-    case 'reset':
-      if (!global.confirm('清空全部内容？\n此操作不可撤销，请先导出备份。')) return;
-      if (!global.confirm('再确认一次：真的要清空吗？')) return;
-      S.resetAll(false);
-      openSet = new Set(); seededOpen = false;
-      closeAll(); render(); toast('已清空');
-      return;
-
-    case 'new':
-      openModal(V.nodeForm(null, {}), '');
-      return;
+  function hex8(n) { return ("00000000" + n.toString(16)).slice(-8); }
+  function digest(s) {
+    s = String(s);
+    return hex8(fnv("zl|" + s + "|1")) + hex8(fnv(s.split("").reverse().join("") + "|2"));
   }
-}
-
-document.addEventListener('click', function (e) {
-  /* 分段选择器（弹窗内） */
-  var seg = e.target.closest('#fStatus button, #fPrio button');
-  if (seg) {
-    qa('button', seg.parentNode).forEach(function (b) { b.classList.remove('is-on'); });
-    seg.classList.add('is-on');
-    return;
+  function authActive() {
+    try { return Number(localStorage.getItem(AUTH.session) || 0) > Date.now(); } catch (e) { return false; }
   }
 
-  var el = e.target.closest('[data-act]');
-  if (!el) {
-    /* 点空白处关闭抽屉 */
-    if (e.target.id === 'scrim') closeAll();
-    return;
+  const $ = (s, el) => (el || document).querySelector(s);
+  const $$ = (s, el) => Array.prototype.slice.call((el || document).querySelectorAll(s));
+
+  const VIEW_META = {
+    home: { label: "总览", scene: 1, motto: "根深方能叶茂" },
+    strategy: { label: "战略", scene: 2, motto: "谋定而后动" },
+    ideas: { label: "想法", scene: 3, motto: "风过竹林，留声" },
+    dist: { label: "分布", scene: 4, motto: "因地制宜，因时制宜" },
+  };
+
+  let state = null;
+  let modalCfg = null;
+
+  /* ---------------- 小工具 ---------------- */
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
   }
-  onAct(el.getAttribute('data-act'), el, e);
-});
+  function pad(n) { return n < 10 ? "0" + n : "" + n; }
+  function fmtDate(ts) {
+    const d = new Date(ts);
+    return (d.getMonth() + 1) + "月" + d.getDate() + "日 " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+  function fmtShort(iso) {
+    if (!iso) return "";
+    const p = String(iso).split("-");
+    return (+p[1]) + "月" + (+p[2]) + "日";
+  }
+  function daysLeft(iso) {
+    const t = new Date(iso + "T00:00:00");
+    const n = new Date();
+    n.setHours(0, 0, 0, 0);
+    return Math.round((t - n) / 86400000);
+  }
+  function dlBadge(iso) {
+    const d = daysLeft(iso);
+    if (d < 0) return '<span class="dl dl--late">逾期' + (-d) + '天</span>';
+    if (d === 0) return '<span class="dl dl--today">今日到期</span>';
+    if (d <= 14) return '<span class="dl dl--soon">余' + d + '天</span>';
+    return '<span class="dl">' + fmtShort(iso) + '</span>';
+  }
+  function save() { Store.save(state); }
+  function log(text) { Store.addLog(state, text); }
 
-/* 侧栏导航 */
-q('#nav').addEventListener('click', function (e) {
-  var b = e.target.closest('.navbtn');
-  if (!b) return;
-  current = b.getAttribute('data-view');
-  query = '';
-  q('#search').value = '';
-  render();
-});
+  /* ---------------- 主题 ---------------- */
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  function themeNow() {
+    const t = state.ui.theme || "auto";
+    return t === "auto" ? (mq.matches ? "dark" : "light") : t;
+  }
+  function applyTheme() {
+    const t = themeNow();
+    document.documentElement.setAttribute("data-theme", t);
+    $$(".theme-seg button").forEach(function (b) {
+      b.classList.toggle("on", b.dataset.theme === (state.ui.theme || "auto"));
+    });
+    const meta = VIEW_META[state.ui.view] || VIEW_META.home;
+    const band = document.querySelector(".bamboo");
+    band.dataset.scene = String(meta.scene);
+    band.dataset.t = t;
+  }
 
-q('#btnTheme').addEventListener('click', toggleTheme);
-q('#btnNew').addEventListener('click', function () { openModal(V.nodeForm(null, {}), ''); });
-q('#drawerClose').addEventListener('click', closeDrawer);
+  /* ---------------- 登录闸门 ---------------- */
+  function initGate() {
+    const gate = $("#gate");
+    if (authActive()) {
+      gate.classList.add("is-off");
+      document.body.classList.remove("locked");
+      return;
+    }
+    document.body.classList.add("locked");
+    $("#gateForm").addEventListener("submit", function (e) {
+      e.preventDefault();
+      const u = $("#gateUser").value.trim();
+      const p = $("#gatePass").value;
+      if (digest(u) === AUTH.hUser && digest(p) === AUTH.hPass) {
+        try { localStorage.setItem(AUTH.session, String(Date.now() + AUTH.keep)); } catch (err) {}
+        gate.classList.add("is-off");
+        document.body.classList.remove("locked");
+        $("#gateErr").textContent = "";
+        $("#gatePass").value = "";
+      } else {
+        $("#gateErr").textContent = "名号或口令不符";
+        $("#gateForm").classList.add("shake");
+        setTimeout(function () { $("#gateForm").classList.remove("shake"); }, 520);
+      }
+    });
+  }
+  function doLogout() {
+    try { localStorage.removeItem(AUTH.session); } catch (e) {}
+    location.reload();
+  }
 
-q('#btnData').addEventListener('click', function () {
-  var d = q('#drawer');
-  d.dataset.id = '';
-  q('#drawerTitle').textContent = '数据与备份';
-  q('#drawerBody').innerHTML = V.dataPanel();
-  d.hidden = false;
-  q('#scrim').hidden = false;
-});
+  /* ---------------- 视图：总览 ---------------- */
+  function statTile(label, value, hint) {
+    return '<div class="tile panel"><p class="tile__label">' + label + '</p>' +
+      '<p class="tile__value">' + value + '</p>' +
+      '<p class="tile__hint">' + hint + '</p></div>';
+  }
 
-/* 搜索 */
-var searchTimer = null;
-q('#search').addEventListener('input', function (e) {
-  var v = e.target.value.trim();
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(function () {
-    query = v;
+  function viewHome() {
+    const st = Store.stats(state);
+    const areas = st.areas;
+    const logs = state.log.slice(0, 8);
+    return '' +
+      '<section class="hero">' +
+      '<p class="hero__label gold-title">竹 墨 题</p>' +
+      '<h1 class="brush hero__title">竹略</h1>' +
+      '<p class="brush hero__slogan">向下生发，向上坚韧</p>' +
+      '<p class="hero__sub">长期计划 · 实现分布</p>' +
+      '</section>' +
+      '<div class="stat-row">' +
+      statTile("总体实现", st.overall + "%", "总纲长势") +
+      statTile("战略领域", st.areas.length + " 域", "一级分支") +
+      statTile("推进中", st.doing + " 枝", "正在生长") +
+      statTile("竹笺存量", st.ideaCount + " 笺", "待培育的想法") +
+      '</div>' +
+      '<div class="grid-2">' +
+      '<div class="panel">' +
+      '<h3 class="panel__title gold-title">总体长势</h3>' +
+      '<div class="rootbar"><i style="width:' + st.overall + '%"></i></div>' +
+      '<ul class="mini-areas">' +
+      (areas.length ? areas.map(function (a) {
+        return '<li><span class="mini-areas__name">' + esc(a.title) + '</span>' +
+          '<span class="mini-areas__bar"><i style="width:' + a.progress + '%"></i></span>' +
+          '<span class="mini-areas__pct">' + a.progress + '%</span></li>';
+      }).join("") : '<li class="empty-line">尚未分枝</li>') +
+      '</ul>' +
+      '<p class="panel__hint">总体实现由各域进度层层汇总而来</p>' +
+      '</div>' +
+      '<div class="panel">' +
+      '<h3 class="panel__title gold-title">近期动态</h3>' +
+      '<ul class="timeline">' +
+      (logs.length ? logs.map(function (l) {
+        return '<li><span class="timeline__dot"></span><span class="timeline__time">' + fmtDate(l.ts) + '</span>' +
+          '<span class="timeline__text">' + esc(l.text) + '</span></li>';
+      }).join("") : '<li class="empty-line">尚无动静</li>') +
+      '</ul>' +
+      '</div>' +
+      '</div>';
+  }
+
+  /* ---------------- 视图：战略 ---------------- */
+  function nodeHtml(node, path) {
+    const kids = node.children || [];
+    const has = kids.length > 0;
+    const open = state.ui.expanded[node.id] !== false;
+    const p = Store.progressOf(node);
+    const st = Store.statusOf(node);
+    const row = '' +
+      '<div class="node__row" data-id="' + node.id + '">' +
+      (has
+        ? '<button class="caret' + (open ? " is-open" : "") + '" data-act="toggle" data-id="' + node.id + '" aria-label="展开收起"></button>'
+        : '<span class="caret caret--leaf"></span>') +
+      '<span class="node__num">' + path.join(".") + '</span>' +
+      '<button class="node__title" data-act="edit" data-id="' + node.id + '" title="点击修改此枝">' + esc(node.title) + '</button>' +
+      (node.note ? '<span class="node__dot" title="' + esc(node.note) + '"></span>' : '') +
+      (node.deadline ? dlBadge(node.deadline) : '') +
+      '<span class="node__bar"><i style="width:' + p + '%"></i></span>' +
+      '<span class="node__pct">' + p + '%</span>' +
+      '<span class="chip chip--' + st + '">' + Store.STATUS_TEXT[st] + '</span>' +
+      '</div>';
+    const addRow = '<li class="ghost-row"><button class="ghost-add" data-act="add-child" data-id="' + node.id + '">＋ 添新枝</button></li>';
+    const kidsHtml = has
+      ? '<ul class="node__kids"' + (open ? "" : " hidden") + '>' +
+        kids.map(function (c, i) { return nodeHtml(c, path.concat([i + 1])); }).join("") + addRow + '</ul>'
+      : '<ul class="node__kids">' + addRow + '</ul>';
+    return '<li class="node" data-id="' + node.id + '">' + row + kidsHtml + '</li>';
+  }
+
+  function viewStrategy() {
+    const root = state.root;
+    const st = Store.stats(state);
+    const rp = Store.progressOf(root);
+    const kids = root.children || [];
+    return '' +
+      '<div class="view-head">' +
+      '<div><h2 class="gold-title">战略 · 谋定而后动</h2>' +
+      '<p class="view-desc">由总纲而分支，由分支而细目，层层可生；进度自下而上汇总</p></div>' +
+      '<div class="view-head__acts">' +
+      '<button class="btn btn--ghost btn--sm" data-act="expand-all">全部展开</button>' +
+      '<button class="btn btn--ghost btn--sm" data-act="collapse-all">全部收起</button>' +
+      '</div>' +
+      '</div>' +
+      '<div class="panel trunk">' +
+      '<div class="trunk__row">' +
+      '<span class="seal seal--sm">竹</span>' +
+      '<button class="trunk__name" data-act="edit" data-id="' + root.id + '">' + esc(root.title) + '</button>' +
+      '<span class="trunk__bar"><i style="width:' + rp + '%"></i></span>' +
+      '<span class="trunk__pct">' + rp + '%</span>' +
+      '<button class="btn btn--jade btn--sm" data-act="add-child" data-id="' + root.id + '">＋ 添新枝</button>' +
+      '</div>' +
+      '<p class="panel__hint">共 ' + st.total + ' 枝 · 已成 ' + st.done + ' · 推进中 ' + st.doing +
+      ' · 未开始 ' + st.fresh + ' · 最深 ' + st.depth + ' 层</p>' +
+      '</div>' +
+      (kids.length
+        ? '<ul class="tree">' + kids.map(function (c, i) { return nodeHtml(c, [i + 1]); }).join("") + '</ul>'
+        : '<div class="panel empty-block">' +
+          '<p class="empty-block__line brush">尚无枝叶</p>' +
+          '<p class="empty-block__hint">先立起第一支，再让它自然细分</p>' +
+          '<div class="empty-block__acts">' +
+          '<button class="btn btn--jade" data-act="add-child" data-id="' + root.id + '">＋ 起首支</button>' +
+          '<button class="btn btn--ghost" data-act="load-sample">载入示例框架</button>' +
+          '</div></div>');
+  }
+
+  /* ---------------- 视图：想法 ---------------- */
+  function parentOptions() {
+    const out = ['<option value="' + state.root.id + '">' + esc(state.root.title) + '（总纲）</option>'];
+    (function rec(n, depth) {
+      (n.children || []).forEach(function (c) {
+        out.push('<option value="' + c.id + '">' + "　".repeat(depth) + esc(c.title) + '</option>');
+        rec(c, depth + 1);
+      });
+    })(state.root, 1);
+    return out.join("");
+  }
+
+  function viewIdeas() {
+    const ideas = state.ideas;
+    return '' +
+      '<div class="view-head">' +
+      '<div><h2 class="gold-title">想法 · 风过竹林，留声</h2>' +
+      '<p class="view-desc">先记下，再培育成枝 —— 想法是竹鞭，落到树上才会生长</p></div>' +
+      '</div>' +
+      '<div class="panel capture">' +
+      '<textarea id="ideaInput" rows="2" placeholder="风过竹林——有什么想法，先落到笺上……"></textarea>' +
+      '<div class="capture__foot">' +
+      '<span class="capture__hint">落笺后可随时「培育为枝」，挂到战略树的任意位置（Ctrl + Enter 快捷落笺）</span>' +
+      '<button class="btn btn--jade" data-act="idea-add">落 笺</button>' +
+      '</div>' +
+      '</div>' +
+      '<ul class="idea-list">' +
+      (ideas.length ? ideas.map(function (i) {
+        return '<li class="panel idea' + (i.grown ? " idea--grown" : "") + '" data-id="' + i.id + '">' +
+          '<p class="idea__text">' + esc(i.text) + '</p>' +
+          '<div class="idea__meta"><span>' + fmtDate(i.createdAt) + '</span>' +
+          (i.grown ? '<span class="chip chip--done">已成枝</span>' : '<span class="chip chip--fresh">待培育</span>') +
+          '</div>' +
+          '<div class="idea__acts">' +
+          (i.grown ? "" :
+            '<span class="idea__grow"><span class="idea__grow-label">挂到</span>' +
+            '<select class="idea__parent">' + parentOptions() + '</select>' +
+            '<button class="btn btn--jade btn--sm" data-act="idea-grow" data-id="' + i.id + '">培育为枝</button></span>') +
+          '<button class="btn btn--ghost btn--sm" data-act="idea-del" data-id="' + i.id + '">舍去</button>' +
+          '</div></li>';
+      }).join("") : '<li class="panel empty-block"><p class="empty-block__line brush">笺上空空</p>' +
+        '<p class="empty-block__hint">想到什么，随手写下一句就好</p></li>') +
+      '</ul>';
+  }
+
+  /* ---------------- 视图：分布 ---------------- */
+  function donut(p) {
+    const R = 54;
+    const C = 2 * Math.PI * R;
+    const on = (C * p) / 100;
+    return '<svg class="donut" viewBox="0 0 132 132" role="img" aria-label="总体实现">' +
+      '<defs><linearGradient id="jadeGrad" x1="0" y1="0" x2="1" y2="1">' +
+      '<stop offset="0%" stop-color="var(--jade-2)"/><stop offset="100%" stop-color="var(--jade)"/>' +
+      '</linearGradient></defs>' +
+      '<circle class="donut__bg" cx="66" cy="66" r="' + R + '"/>' +
+      '<circle class="donut__on" cx="66" cy="66" r="' + R + '" stroke-dasharray="' + on + " " + (C - on) +
+      '" stroke-dashoffset="' + (C / 4) + '"/>' +
+      '<text class="donut__num" x="66" y="64">' + p + '%</text>' +
+      '<text class="donut__label" x="66" y="86">总体实现</text>' +
+      '</svg>';
+  }
+
+  function viewDist() {
+    const st = Store.stats(state);
+    return '' +
+      '<div class="view-head">' +
+      '<div><h2 class="gold-title">分布 · 因地制宜，因时制宜</h2>' +
+      '<p class="view-desc">实现分布于各域，期限见于纵深；哪一枝拖了后腿，一眼可见</p></div>' +
+      '</div>' +
+      '<div class="grid-2 grid-2--dist">' +
+      '<div class="panel donut-panel">' + donut(st.overall) +
+      '<div class="donut-side">' +
+      '<p class="donut-side__line"><b>' + st.total + '</b> 枝在册</p>' +
+      '<p class="donut-side__line"><b>' + st.done + '</b> 枝已成</p>' +
+      '<p class="donut-side__line"><b>' + st.doing + '</b> 枝推进</p>' +
+      '<p class="donut-side__line"><b>' + st.depth + '</b> 层纵深</p>' +
+      '</div></div>' +
+      '<div class="panel">' +
+      '<h3 class="panel__title gold-title">各域实现</h3>' +
+      '<ul class="area-list">' +
+      (st.areas.length ? st.areas.map(function (a) {
+        return '<li><div class="area-list__top"><span class="area-list__name">' + esc(a.title) + '</span>' +
+          '<span class="area-list__pct">' + a.progress + '%</span></div>' +
+          '<div class="area-list__bar"><i style="width:' + a.progress + '%"></i></div>' +
+          '<div class="area-list__meta">' + a.done + " / " + a.total + ' 枝已成' +
+          (a.deadline ? " · 期限 " + fmtShort(a.deadline) : "") + '</div></li>';
+      }).join("") : '<li class="empty-line">尚未分枝</li>') +
+      '</ul></div>' +
+      '</div>' +
+      '<div class="panel">' +
+      '<h3 class="panel__title gold-title">时间纵深</h3>' +
+      '<ul class="up-list">' +
+      (st.upcoming.length ? st.upcoming.map(function (u) {
+        return '<li><span class="up-list__date">' + fmtShort(u.deadline) + '</span>' +
+          '<span class="up-list__title">' + esc(u.title) + '</span>' + dlBadge(u.deadline) + '</li>';
+      }).join("") : '<li class="empty-line">尚未设定任何期限</li>') +
+      '</ul>' +
+      '<p class="panel__hint">在「战略」里点开任意一枝，可为它写下期限</p>' +
+      '</div>';
+  }
+
+  const VIEWS = { home: viewHome, strategy: viewStrategy, ideas: viewIdeas, dist: viewDist };
+
+  /* ---------------- 渲染 ---------------- */
+  function render() {
+    const v = VIEW_META[state.ui.view] ? state.ui.view : "home";
+    $("#view").innerHTML = VIEWS[v]();
+    $$(".nav__item").forEach(function (b) { b.classList.toggle("on", b.dataset.view === v); });
+    const seg = $("#viewSeg");
+    if (seg) seg.textContent = VIEW_META[v].motto;
+  }
+
+  function route() {
+    const v = (location.hash || "#/home").replace(/^#\//, "") || "home";
+    state.ui.view = VIEW_META[v] ? v : "home";
+    save();
     render();
-  }, 160);
-});
-
-/* 进度滑块实时回显 */
-q('#modal').addEventListener('input', function (e) {
-  if (e.target.id === 'fProgress') {
-    var out = q('#fProgressOut');
-    if (out) out.textContent = e.target.value + '%';
+    applyTheme();
+    window.scrollTo(0, 0);
   }
-});
+  function setView(v) { location.hash = "#/" + v; }
 
-/* 导入文件：输入框按需创建（它只在数据面板里用得到，不放静态 DOM） */
-var _importInput = null;
-function importInput() {
-  if (_importInput) return _importInput;
-  var f = document.createElement('input');
-  f.type = 'file';
-  f.accept = 'application/json,.json';
-  f.hidden = true;
-  f.addEventListener('change', function () {
-    var file = f.files && f.files[0];
-    if (!file) return;
-    var fr = new FileReader();
+  /* ---------------- 弹窗：添枝 / 修枝 ---------------- */
+  function openModal(cfg) {
+    modalCfg = cfg;
+    const isEdit = cfg.kind === "edit";
+    const node = isEdit ? Store.findNode(state.root, cfg.id) : null;
+    const hasKids = node && (node.children || []).length > 0;
+    const p = node ? (hasKids ? Store.progressOf(node) : (node.p || 0)) : 0;
+    const parent = isEdit ? Store.findParent(state.root, cfg.id) : Store.findNode(state.root, cfg.id);
+    $("#modal").innerHTML = '' +
+      '<div class="modal__mask" data-act="modal-close"></div>' +
+      '<div class="modal__card" role="dialog" aria-modal="true">' +
+      '<h3 class="modal__title gold-title">' + (isEdit ? "修枝" : "添新枝") + '</h3>' +
+      (parent && parent.id !== (node && node.id) ? '<p class="modal__where">挂于「' + esc(parent.title) + '」之下</p>' : '') +
+      '<label class="field"><span class="field__label">名称</span>' +
+      '<input id="mTitle" type="text" maxlength="40" placeholder="这一枝叫什么" value="' + (node ? esc(node.title) : "") + '"></label>' +
+      '<label class="field"><span class="field__label">备注</span>' +
+      '<textarea id="mNote" rows="3" placeholder="想达成什么、怎么算做成（可留空）">' + (node ? esc(node.note || "") : "") + '</textarea></label>' +
+      '<div class="field-row">' +
+      '<label class="field"><span class="field__label">期限</span>' +
+      '<input id="mDate" type="date" value="' + (node && node.deadline ? node.deadline : "") + '"></label>' +
+      '<label class="field field--prog"><span class="field__label">进度</span>' +
+      '<input id="mProg" type="range" min="0" max="100" step="5" value="' + p + '"' + (hasKids ? " disabled" : "") + '>' +
+      '<span class="field__val" id="mProgVal">' + p + '%</span></label>' +
+      '</div>' +
+      (hasKids ? '<p class="modal__hint">此枝已分枝，进度由下级自动汇总，无需手填</p>' : '') +
+      '<div class="modal__foot">' +
+      '<div class="modal__foot-l">' +
+      (isEdit
+        ? '<button class="btn btn--ghost btn--sm" data-act="node-up">上移</button>' +
+          '<button class="btn btn--ghost btn--sm" data-act="node-down">下移</button>' +
+          '<button class="btn btn--danger btn--sm" data-act="node-del">舍去此枝</button>'
+        : '') +
+      '</div>' +
+      '<div class="modal__foot-r">' +
+      '<button class="btn btn--ghost" data-act="modal-close">取消</button>' +
+      '<button class="btn btn--jade" data-act="modal-save">保存</button>' +
+      '</div></div></div>';
+    $("#modal").classList.add("is-open");
+    const ti = $("#mTitle");
+    if (ti) { ti.focus(); ti.select(); }
+  }
+  function closeModal() {
+    $("#modal").classList.remove("is-open");
+    $("#modal").innerHTML = "";
+    modalCfg = null;
+  }
+
+  function saveModal() {
+    if (!modalCfg) return;
+    const title = $("#mTitle").value.trim();
+    if (!title) { $("#mTitle").classList.add("is-bad"); $("#mTitle").focus(); return; }
+    const note = $("#mNote").value.trim();
+    const deadline = $("#mDate").value || null;
+    const prog = +$("#mProg").value;
+    if (modalCfg.kind === "child") {
+      const parent = Store.findNode(state.root, modalCfg.id);
+      parent.children = parent.children || [];
+      parent.children.push({ id: Store.uid(), title: title, note: note, deadline: deadline, children: [], p: prog });
+      Store.addLog(state, "在「" + parent.title + "」下新添「" + title + "」");
+    } else {
+      const node = Store.findNode(state.root, modalCfg.id);
+      const hasKids = (node.children || []).length > 0;
+      const oldTitle = node.title;
+      const oldP = Store.progressOf(node);
+      node.title = title;
+      node.note = note;
+      node.deadline = deadline;
+      if (!hasKids) node.p = prog;
+      const newP = Store.progressOf(node);
+      if (oldTitle !== title) Store.addLog(state, "「" + oldTitle + "」更名为「" + title + "」");
+      if (oldP !== newP) Store.addLog(state, "「" + title + "」进度 " + oldP + "% → " + newP + "%");
+    }
+    save();
+    closeModal();
+    render();
+  }
+
+  function delNode() {
+    if (!modalCfg) return;
+    const node = Store.findNode(state.root, modalCfg.id);
+    if (!node) return;
+    const parent = Store.findParent(state.root, node.id);
+    if (!parent) return;
+    const n = Store.countDesc(node);
+    if (!window.confirm("舍去「" + node.title + "」" + (n ? "及其下 " + n + " 枝" : "") + "？此操作不可撤销。")) return;
+    parent.children = parent.children.filter(function (c) { return c.id !== node.id; });
+    Store.addLog(state, "舍去「" + node.title + "」" + (n ? "及其下 " + n + " 枝" : ""));
+    save();
+    closeModal();
+    render();
+  }
+
+  function moveNode(dir) {
+    if (!modalCfg) return;
+    const node = Store.findNode(state.root, modalCfg.id);
+    const parent = Store.findParent(state.root, node.id);
+    if (!parent) return;
+    const arr = parent.children;
+    const i = arr.indexOf(node);
+    const j = i + dir;
+    if (j < 0 || j >= arr.length) return;
+    arr.splice(i, 1);
+    arr.splice(j, 0, node);
+    Store.addLog(state, "「" + node.title + "」" + (dir < 0 ? "上移" : "下移") + "一位");
+    save();
+    render();
+    openModal({ kind: "edit", id: node.id });
+  }
+
+  /* ---------------- 想法 ---------------- */
+  function addIdea() {
+    const el = $("#ideaInput");
+    const text = el.value.trim();
+    if (!text) { el.focus(); return; }
+    state.ideas.unshift({ id: Store.uid(), text: text, createdAt: Date.now(), grown: null });
+    Store.addLog(state, "落下一笺：「" + text.slice(0, 18) + (text.length > 18 ? "…" : "") + "」");
+    save();
+    render();
+    const again = $("#ideaInput");
+    if (again) again.focus();
+  }
+  function growIdea(ideaId, btn) {
+    const idea = state.ideas.filter(function (i) { return i.id === ideaId; })[0];
+    if (!idea) return;
+    const sel = btn.closest(".idea__grow").querySelector(".idea__parent");
+    const parent = Store.findNode(state.root, sel.value);
+    if (!parent) return;
+    const title = idea.text.length > 20 ? idea.text.slice(0, 20) : idea.text;
+    parent.children = parent.children || [];
+    parent.children.push({ id: Store.uid(), title: title, note: idea.text, deadline: null, children: [], p: 0 });
+    idea.grown = parent.id;
+    Store.addLog(state, "把「" + title + "」培育成「" + parent.title + "」下的新枝");
+    save();
+    render();
+  }
+  function delIdea(id) {
+    const idea = state.ideas.filter(function (i) { return i.id === id; })[0];
+    if (!idea) return;
+    if (!window.confirm("舍去这一笺想法？")) return;
+    state.ideas = state.ideas.filter(function (i) { return i.id !== id; });
+    Store.addLog(state, "舍去一笺想法");
+    save();
+    render();
+  }
+
+  /* ---------------- 导入导出 ---------------- */
+  function doExport() {
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    const d = new Date();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "竹略-备份-" + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + ".json";
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+  }
+  function doImport(file) {
+    const fr = new FileReader();
     fr.onload = function () {
       try {
-        var n = S.importJSON(String(fr.result));
-        openSet = new Set(); seededOpen = false;
-        closeAll(); render();
-        toast('已导入 ' + n + ' 个节点');
-      } catch (err) {
-        toast('导入失败：' + err.message);
+        const obj = JSON.parse(fr.result);
+        if (!obj || !obj.root) throw new Error("bad");
+        if (!window.confirm("导入将覆盖当前全部内容，继续？")) return;
+        state = obj;
+        state.ideas = state.ideas || [];
+        state.log = state.log || [];
+        state.ui = Object.assign({ theme: "auto", view: "home", expanded: {} }, state.ui || {});
+        Store.addLog(state, "导入了一份备份");
+        save();
+        route();
+      } catch (e) {
+        window.alert("这份备份读不出来，请确认是竹略导出的 JSON 文件。");
       }
     };
-    fr.readAsText(file, 'utf-8');
-    f.value = '';
-  });
-  document.body.appendChild(f);
-  _importInput = f;
-  return f;
-}
-
-/* 看板拖拽 */
-document.addEventListener('dragstart', function (e) {
-  var card = e.target.closest ? e.target.closest('.bcard') : null;
-  if (!card) return;
-  dragId = card.getAttribute('data-id');
-  card.classList.add('is-drag');
-  try {
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', dragId);
-  } catch (err) {}
-});
-document.addEventListener('dragend', function (e) {
-  var card = e.target.closest ? e.target.closest('.bcard') : null;
-  if (card) card.classList.remove('is-drag');
-  qa('.bcol.is-over').forEach(function (c) { c.classList.remove('is-over'); });
-});
-document.addEventListener('dragover', function (e) {
-  var col = e.target.closest ? e.target.closest('.bcol') : null;
-  if (!col) return;
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  qa('.bcol.is-over').forEach(function (c) { if (c !== col) c.classList.remove('is-over'); });
-  col.classList.add('is-over');
-});
-document.addEventListener('dragleave', function (e) {
-  var col = e.target.closest ? e.target.closest('.bcol') : null;
-  if (col && !col.contains(e.relatedTarget)) col.classList.remove('is-over');
-});
-document.addEventListener('drop', function (e) {
-  var col = e.target.closest ? e.target.closest('.bcol') : null;
-  if (!col) return;
-  e.preventDefault();
-  var id = dragId;
-  try { id = id || e.dataTransfer.getData('text/plain'); } catch (err) {}
-  qa('.bcol.is-over').forEach(function (c) { c.classList.remove('is-over'); });
-  if (!id || !S.byId(id)) return;
-  var to = col.getAttribute('data-status');
-  if (S.byId(id).status === to) return;
-  S.setStatus(id, to);
-  render();
-  toast('已移到「' + S.STATUS_MAP[to].name + '」');
-});
-
-/* 键盘 */
-document.addEventListener('keydown', function (e) {
-  if (e.key === 'Escape') { closeAll(); return; }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-    e.preventDefault();
-    q('#search').focus();
+    fr.readAsText(file);
   }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && !q('#modal').hidden) {
-    e.preventDefault();
-    saveNode();
+
+  /* ---------------- 事件 ---------------- */
+  function bind() {
+    document.addEventListener("click", function (e) {
+      const btn = e.target.closest("[data-act]");
+      if (!btn) return;
+      const act = btn.dataset.act;
+      const id = btn.dataset.id;
+      switch (act) {
+        case "nav": setView(btn.dataset.view); break;
+        case "theme": state.ui.theme = btn.dataset.theme; save(); applyTheme(); break;
+        case "toggle": {
+          const cur = state.ui.expanded[id] !== false;
+          state.ui.expanded[id] = !cur;
+          save(); render(); break;
+        }
+        case "expand-all": Store.walk(state.root, function (n) { state.ui.expanded[n.id] = true; }); save(); render(); break;
+        case "collapse-all": Store.walk(state.root, function (n) { state.ui.expanded[n.id] = false; }); save(); render(); break;
+        case "add-child": openModal({ kind: "child", id: id }); break;
+        case "edit": openModal({ kind: "edit", id: id }); break;
+        case "modal-close": closeModal(); break;
+        case "modal-save": saveModal(); break;
+        case "node-del": delNode(); break;
+        case "node-up": moveNode(-1); break;
+        case "node-down": moveNode(1); break;
+        case "idea-add": addIdea(); break;
+        case "idea-grow": growIdea(id, btn); break;
+        case "idea-del": delIdea(id); break;
+        case "export": doExport(); break;
+        case "import": $("#importFile").click(); break;
+        case "logout": doLogout(); break;
+        case "load-sample":
+          if (window.confirm("载入一份示例框架？当前内容会被覆盖。")) {
+            const keepView = state.ui.view;
+            state = Store.sample();
+            state.ui.view = keepView;
+            save();
+            render();
+          }
+          break;
+      }
+    });
+
+    document.addEventListener("input", function (e) {
+      if (e.target.id === "mProg") $("#mProgVal").textContent = e.target.value + "%";
+    });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && $("#modal").classList.contains("is-open")) closeModal();
+      if (e.target.id === "ideaInput" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); addIdea(); }
+      if ($("#modal").classList.contains("is-open") && e.key === "Enter" && e.target.id !== "mNote") {
+        e.preventDefault(); saveModal();
+      }
+    });
+
+    $("#importFile").addEventListener("change", function (e) {
+      if (e.target.files && e.target.files[0]) doImport(e.target.files[0]);
+      e.target.value = "";
+    });
   }
-});
 
-/* 系统主题变化 */
-if (global.matchMedia) {
-  var mq = global.matchMedia('(prefers-color-scheme: dark)');
-  var onMq = function () { if (S.state().ui.theme === 'auto') applyTheme(); };
-  if (mq.addEventListener) mq.addEventListener('change', onMq);
-  else if (mq.addListener) mq.addListener(onMq);
-}
-
-/* ══════════ 登录门禁 ══════════ */
-function boot() {
-  buildBamboo();
-  S.load();            /* 必须先载入数据：applyTheme / render 都依赖 state */
-  applyTheme();
-
-  if (A.active()) return enter();
-
-  var form = q('#gateForm');
-  var err = q('#gateErr');
-  form.addEventListener('submit', function (e) {
-    e.preventDefault();
-    var u = q('#gateUser').value.trim();
-    var p = q('#gatePass').value;
-    if (!u || !p) { fail('请输入账号与密码'); return; }
-    if (!A.valid(u, p)) { fail('账号或密码不对'); return; }
-    A.mark();
-    enter();
-  });
-  function fail(msg) {
-    err.textContent = msg;
-    q('#gatePass').value = '';
-    var g = q('#gate');
-    g.classList.remove('shake');
-    void g.offsetWidth;
-    g.classList.add('shake');
+  /* ---------------- 启动 ---------------- */
+  function init() {
+    state = Store.load();
+    initGate();
+    bind();
+    window.addEventListener("hashchange", route);
+    if (mq.addEventListener) {
+      mq.addEventListener("change", function () { if ((state.ui.theme || "auto") === "auto") applyTheme(); });
+    }
+    if (!location.hash) location.hash = "#/" + (VIEW_META[state.ui.view] ? state.ui.view : "home");
+    route();
   }
-  setTimeout(function () { q('#gateUser').focus(); }, 200);
-}
 
-function enter() {
-  var g = q('#gate');
-  g.style.transition = 'opacity .45s ease';
-  g.style.opacity = '0';
-  setTimeout(function () { g.hidden = true; }, 460);
-
-  q('#app').hidden = false;
-  applyTheme();
-  render();
-  void V;
-}
-
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-else boot();
-
-})(window);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+})();
