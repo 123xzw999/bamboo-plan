@@ -98,6 +98,7 @@ bamboo-plan/
 | `subset.py` | 扫描站点源文件用到的字，子集化字体（6.3MB 整包 → 94KB） |
 | `verify.py` | 31 项端到端断言（门禁、四视图、增删改、双主题计算样式、持久化…） |
 | `serve_inject.py` | 验收用的注入代理（预置登录态，并输出计算样式断言） |
+| `live_probe.js` | 生成「线上绝对地址探针页」，用 `file://` 在真实网络下验证已部署的站点 |
 
 ```bash
 python tools/make_bamboo.py
